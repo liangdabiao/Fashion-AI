@@ -153,6 +153,7 @@ def cmd_generate(args):
     threshold = args.sales_threshold
     ratio = args.aspect_ratio
     size = args.image_size
+    model = args.model
 
     for new_prod in new_products:
         nid = new_prod["new_id"]
@@ -190,11 +191,12 @@ def cmd_generate(args):
         style_prompt = analyze_style(llm, ref_images)
 
         # Step 3: Generate promo photo
-        print("\n[Step 3] Generating promotional photo with Nano Banana 2...")
+        model_id = config.get_image_gen_model(model)
+        print(f"\n[Step 3] Generating promotional photo with {model_id}...")
         scene_hint = new_prod.get("prompt_hint", "")
         generated = generate_promo_photo(
             new_img, ref_images[0], style_prompt, scene_hint, nid,
-            aspect_ratio=ratio, image_size=size,
+            aspect_ratio=ratio, image_size=size, model_name=model,
         )
 
         if generated:
@@ -227,6 +229,10 @@ def main():
     p_gen.add_argument("--sales-threshold", type=int, default=config.SALES_THRESHOLD, help=f"Min sales count (default: {config.SALES_THRESHOLD})")
     p_gen.add_argument("--aspect-ratio", default=config.ASPECT_RATIO, help=f"Image aspect ratio (default: {config.ASPECT_RATIO})")
     p_gen.add_argument("--image-size", default=config.IMAGE_SIZE, help=f"Image resolution (default: {config.IMAGE_SIZE})")
+    p_gen.add_argument("--model", default=None,
+                       choices=list(config.IMAGE_GEN_MODELS.keys()),
+                       help=f"Image generation model (default: {config.DEFAULT_IMAGE_GEN_MODEL}). "
+                            f"Options: {', '.join(config.IMAGE_GEN_MODELS.keys())}")
     p_gen.set_defaults(func=cmd_generate)
 
     args = parser.parse_args()

@@ -1,21 +1,35 @@
 import io
+import time
 import base64
 
 import requests as req
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from PIL import Image
 
 import config
 from utils import image_to_uri, save_image
 
 
+def _get_session() -> req.Session:
+    session = req.Session()
+    retry = Retry(total=3, backoff_factor=2, status_forcelist=[502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    return session
+
+
 def generate_promo_photo(new_image: Image.Image,
                          ref_image: Image.Image, style_prompt: str,
                          scene_hint: str, new_id: str,
-                         aspect_ratio: str = None, image_size: str = None) -> list[Image.Image]:
+                         aspect_ratio: str = None, image_size: str = None,
+                         model_name: str = None) -> list[Image.Image]:
     if aspect_ratio is None:
         aspect_ratio = config.ASPECT_RATIO
     if image_size is None:
         image_size = config.IMAGE_SIZE
+
+    model_id = config.get_image_gen_model(model_name)
 
     gen_prompt = (
         f"I have a new clothing product (Image 1: flat-lay photo) and a reference "
@@ -38,19 +52,34 @@ def generate_promo_photo(new_image: Image.Image,
     ]
 
     payload = {
-        "model": config.IMAGE_GEN_MODEL,
+        "model": model_id,
         "messages": [{"role": "user", "content": gen_content}],
         "modalities": ["image", "text"],
-        "image_config": {"aspect_ratio": aspect_ratio, "image_size": image_size},
     }
 
-    print(f"Generating promotional photo with {config.IMAGE_GEN_MODEL}...")
-    resp = req.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=120,
-    )
+    if "google" in model_id:
+        payload["image_config"] = {"aspect_ratio": aspect_ratio, "image_size": image_size}
+    elif "openai" in model_id:
+        payload["image_config"] = {"aspect_ratio": aspect_ratio}
+
+    print(f"Generating promotional photo with {model_id}...")
+    for attempt in range(4):
+        try:
+            resp = _get_session().post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=180,
+            )
+            data = resp.json()
+            break
+        except (req.exceptions.SSLError, req.exceptions.ConnectionError) as e:
+            if attempt < 3:
+                wait = (attempt + 1) * 5
+                print(f"  Network error (attempt {attempt+1}/4), retrying in {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                raise
     data = resp.json()
     print("Done!")
 
@@ -66,8 +95,13 @@ def generate_promo_photo(new_image: Image.Image,
             path = save_image(img, f"promo_{new_id}_{i+1}.png")
             print(f"Saved: {path}")
     else:
-        print("No image generated. Raw response:")
-        print(data)
+        error = data.get("error", {})
+        if "unsupported_country" in str(error.get("metadata", {})):
+            print("Error: OpenAI image models are not available in your region.")
+            print(f"  Try using: --model nano-banana")
+        else:
+            print("No image generated. Raw response:")
+            print(data)
 
     return generated_images
 

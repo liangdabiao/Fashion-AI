@@ -82,7 +82,15 @@ llama-nemotron-embed-vl-1b-v2 (Embedding API)
 |------|------|------|
 | `nvidia/llama-nemotron-embed-vl-1b-v2` | 图片/文本 Embedding | 免费，输出 2048 维向量，支持图文同空间 |
 | `qwen/qwen3.5-397b-a17b` | 爆款风格分析 | 多模态，可同时理解图片和文本 |
-| `google/gemini-3.1-flash-image-preview` | 宣传图生成 | 支持多参考图融合、多比例、文字渲染 |
+
+**宣传图生成模型**（通过 `--model` 参数切换）：
+
+| 别名 | 模型 | 说明 |
+|------|------|------|
+| `nano-banana`（默认） | `google/gemini-3.1-flash-image-preview` | 支持多参考图融合、多比例（含 8:1/1:8 超宽超高）、文字渲染，单张约 $0.067，无地区限制 |
+| `gpt-image` | `openai/gpt-5.4-image-2` | OpenAI 最新生图模型，人像融合效果好，**需海外网络环境** |
+| `gpt-image-pro` | `openai/gpt-5-image` | OpenAI 生图 Pro 版，质量更高，**需海外网络环境** |
+| `gpt-image-mini` | `openai/gpt-5-image-mini` | OpenAI 生图轻量版，成本更低，**需海外网络环境** |
 
 ### Milvus 混合 Schema
 
@@ -205,7 +213,14 @@ python main.py setup
 python main.py search --new-id NEW001
 
 # Step 3: 完整流水线（检索 → 风格分析 → 生图）
+# 默认使用 Nano Banana 2 生图
 python main.py generate --new-id NEW001
+
+# 使用 GPT-5.4 Image 2 生图
+python main.py generate --new-id NEW001 --model gpt-image
+
+# 使用 GPT-5 Image Pro 生图
+python main.py generate --new-id NEW001 --model gpt-image-pro
 ```
 
 生成的宣传图保存在 `output/` 目录。
@@ -251,6 +266,7 @@ python main.py generate [OPTIONS]
 | `--sales-threshold` | 1500 | 最低销量过滤门槛 |
 | `--aspect-ratio` | `3:4` | 生成图宽高比（支持 `1:1`, `3:4`, `4:1`, `9:16` 等） |
 | `--image-size` | `2K` | 生成图分辨率（`512px`, `1K`, `2K`, `4K`） |
+| `--model` | `nano-banana` | 生图模型：`nano-banana`, `gpt-image`, `gpt-image-pro`, `gpt-image-mini` |
 
 ## 开发者指南
 
@@ -280,17 +296,35 @@ results = client.hybrid_search(reqs=[dense_req, sparse_req], ranker=RRFRanker(k=
 
 RRF（Reciprocal Rank Fusion）算法公式：`score(d) = Σ 1/(k + rank(d))`，将两路检索的排名融合为一个综合分数。
 
-**2. Nano Banana 2 生图参数**
+**2. 多生图模型支持**
+
+所有生图模型统一通过 OpenRouter `/api/v1/chat/completions` 调用，格式一致：
 
 ```python
-extra_body={
-    "modalities": ["text", "image"],           # 必须声明输出包含图片
-    "image_config": {
-        "aspect_ratio": "3:4",                  # 宽高比
-        "image_size": "2K",                     # 分辨率
-    },
+payload = {
+    "model": model_id,  # 如 "google/gemini-3.1-flash-image-preview" 或 "openai/gpt-5.4-image-2"
+    "messages": [{"role": "user", "content": [...]}],
+    "modalities": ["image", "text"],  # 声明输出包含图片
 }
+# Gemini 系列额外支持 image_config 控制分辨率
+if "google" in model_id:
+    payload["image_config"] = {"aspect_ratio": "3:4", "image_size": "2K"}
+# OpenAI 系列支持 aspect_ratio
+elif "openai" in model_id:
+    payload["image_config"] = {"aspect_ratio": "3:4"}
 ```
+
+模型差异：
+
+| 特性 | Nano Banana 2 (Gemini) | GPT Image 系列 |
+|------|----------------------|---------------|
+| 超宽/超高比例 | 支持 4:1, 1:4, 8:1, 1:8 | 标准比例 |
+| 分辨率控制 | 支持 0.5K~4K | 自动 |
+| 文字渲染 | 支持多语言、手写体 | 支持 |
+| 参考图融合 | 支持 14 张（10对象+4角色） | 支持多张 |
+| 人像融合 | 偶有服装贴合问题 | 更自然 |
+
+通过 `--model` 参数自由切换，同一套代码适配两种生图引擎。
 
 **3. Qwen 3.x Thinking 模式**
 
